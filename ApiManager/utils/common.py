@@ -3,9 +3,11 @@ import io
 import json
 import logging
 import os
+import platform
 from json import JSONDecodeError
 
 import yaml
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Sum
 from djcelery.models import PeriodicTask
 
@@ -13,6 +15,7 @@ from ApiManager.models import ModuleInfo, TestCaseInfo, TestReports, TestSuite
 from ApiManager.utils.operation import add_project_data, add_module_data, add_case_data, add_config_data, \
     add_register_data
 from ApiManager.utils.task_opt import create_task
+
 
 logger = logging.getLogger('HttpRunnerManager')
 
@@ -143,6 +146,7 @@ def load_modules(**kwargs):
         string = string + str(value[0]) + '^=' + value[1] + 'replaceFlag'
     return string[:len(string) - 11]
 
+
 def load_testsuites(**kwargs):
     """
     加载对应项目的模块信息，用户前端ajax请求返回
@@ -170,7 +174,7 @@ def load_cases(type=1, **kwargs):
     if module == '请选择':
         return ''
     case_info = TestCaseInfo.objects.filter(belong_project=belong_project, belong_module=module, type=type). \
-            values_list('id', 'name').order_by('-create_time')
+        values_list('id', 'name').order_by('-create_time')
     case_info = list(case_info)
     string = ''
     for value in case_info:
@@ -426,11 +430,12 @@ def task_logic(**kwargs):
         return '任务名称重复，请重新命名'
     desc = " ".join(str(i) for i in crontab_time)
     name = kwargs.get('name')
+    mode = kwargs.pop('mode')
 
     if 'module' in kwargs.keys():
         kwargs.pop('project')
 
-        if kwargs.pop('mode') == '1':
+        if mode == '1':
             return create_task(name, 'ApiManager.tasks.module_hrun', kwargs, crontab, desc)
         else:
             kwargs['suite'] = kwargs.pop('module')
@@ -589,3 +594,53 @@ def get_total_values():
 
     return total
 
+
+def update_include(include):
+    for i in range(0, len(include)):
+        if isinstance(include[i], dict):
+            id = include[i]['config'][0]
+            source_name = include[i]['config'][1]
+            try:
+                name = TestCaseInfo.objects.get(id=id).name
+            except ObjectDoesNotExist:
+                name = source_name+'_已删除!'
+                logger.warning('依赖的 {name} 用例/配置已经被删除啦！！'.format(name=source_name))
+
+            include[i] = {
+                'config': [id, name]
+            }
+        else:
+            id = include[i][0]
+            source_name = include[i][1]
+            try:
+                name = TestCaseInfo.objects.get(id=id).name
+            except ObjectDoesNotExist:
+                name = source_name + ' 已删除'
+                logger.warning('依赖的 {name} 用例/配置已经被删除啦！！'.format(name=source_name))
+
+            include[i] = [id, name]
+
+    return include
+
+
+def timestamp_to_datetime(summary, type=True):
+    if not type:
+        time_stamp = int(summary["time"]["start_at"])
+        summary['time']['start_datetime'] = datetime.datetime. \
+            fromtimestamp(time_stamp).strftime('%Y-%m-%d %H:%M:%S')
+
+    for detail in summary['details']:
+        try:
+            time_stamp = int(detail['time']['start_at'])
+            detail['time']['start_at'] = datetime.datetime.fromtimestamp(time_stamp).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            pass
+
+        for record in detail['records']:
+            try:
+                time_stamp = int(record['meta_data']['request']['start_timestamp'])
+                record['meta_data']['request']['start_timestamp'] = \
+                    datetime.datetime.fromtimestamp(time_stamp).strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                pass
+    return summary
